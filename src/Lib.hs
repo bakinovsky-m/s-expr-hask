@@ -1,8 +1,11 @@
 module Lib where
 
 import Text.ParserCombinators.Parsec
-import Text.Parsec
-import Control.Applicative
+    ( parse, digit, many1, between, char, ParseError, Parser, spaces, skipMany, skipMany1 )
+import Text.Parsec ( try, many, (<|>) )
+import Control.Applicative ()
+import Text.Parsec.Combinator (option)
+import Control.Monad (liftM2)
 
 -- + (123)
 -- + (+ 1 2)
@@ -17,7 +20,6 @@ openBracket :: Parser Char
 openBracket = char '('
 closeBracket :: Parser Char
 closeBracket = char ')'
-brackets = between openBracket closeBracket
 
 value :: Parser Value
 value = do
@@ -26,32 +28,35 @@ value = do
 
 op :: Parser Op
 op =  do
-  a <- char '+' Text.Parsec.<|> char '-'
+  a <- char '+' <|> char '-'
   case a of
      '+' -> return Plus
      '-' -> return Minus
      _ -> return Minus
 
 svalue :: Parser SExpr
-svalue = do
-  -- openBracket
-  v <- value
-  -- closeBracket
-  return $ SValue v
+svalue = SValue <$> (try (between openBracket closeBracket inner) <|> inner)
+  where
+    inner = spaces *> value <* spaces
 
 sop :: Parser SExpr
-sop = do
-  openBracket
-  o <- op
-  Text.Parsec.many $ char ' '
-  e1 <- sexpr
-  Text.Parsec.many $ char ' '
-  e2 <- sexpr
-  closeBracket
+sop = between openBracket closeBracket $ do
+  o <- spaces *> op <* spaces
+  e1 <- sexpr <* spaces
+  e2 <- sexpr <* spaces
   return $ SOp o e1 e2
+-- sop = do
+--   openBracket
+--   o <- op
+--   spaces
+--   e1 <- sexpr
+--   spaces
+--   e2 <- sexpr
+--   closeBracket
+--   return $ SOp o e1 e2
 
 sexpr :: Parser SExpr
-sexpr = Text.Parsec.try svalue Text.Parsec.<|> sop
+sexpr = try svalue <|> sop
 
 eval :: SExpr -> Int
 eval e = case e of
