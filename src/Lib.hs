@@ -1,20 +1,18 @@
 module Lib where
 
 import Text.ParserCombinators.Parsec
-    ( parse, digit, many1, between, char, ParseError, Parser, spaces, skipMany, skipMany1 )
-import Text.Parsec ( try, many, (<|>) )
-import Control.Applicative ()
-import Text.Parsec.Combinator (option)
-import Control.Monad (liftM2)
+    ( parse, digit, many1, between, char, ParseError, Parser, spaces, skipMany, skipMany1, sepBy )
+import Text.Parsec ( try, many, (<|>), option)
 
 -- + (123)
 -- + (+ 1 2)
--- - (+ (1) (2))
+-- + (+ (1) (2))
 -- + (+ (+ 1 2) 3)
+-- + (+ 1 2 3)
 
 newtype Value = Value Int deriving (Show)
 data Op = Plus | Minus deriving (Show)
-data SExpr = SValue Value | SOp Op SExpr SExpr deriving (Show)
+data SExpr = SValue Value | SOp Op [SExpr] deriving (Show)
 
 openBracket :: Parser Char
 openBracket = char '('
@@ -42,18 +40,8 @@ svalue = SValue <$> (try (between openBracket closeBracket inner) <|> inner)
 sop :: Parser SExpr
 sop = between openBracket closeBracket $ do
   o <- spaces *> op <* spaces
-  e1 <- sexpr <* spaces
-  e2 <- sexpr <* spaces
-  return $ SOp o e1 e2
--- sop = do
---   openBracket
---   o <- op
---   spaces
---   e1 <- sexpr
---   spaces
---   e2 <- sexpr
---   closeBracket
---   return $ SOp o e1 e2
+  es <- sepBy sexpr spaces
+  return $ SOp o es
 
 sexpr :: Parser SExpr
 sexpr = try svalue <|> sop
@@ -61,9 +49,9 @@ sexpr = try svalue <|> sop
 eval :: SExpr -> Int
 eval e = case e of
   SValue (Value v) -> v
-  SOp op e1 e2 -> case op of
-    Plus -> (+) (eval e1) (eval e2)
-    Minus -> (-) (eval e1) (eval e2)
+  SOp op es -> case op of
+    Plus -> sum $ fmap eval es
+    Minus -> foldr (-) 0 $ fmap eval es
 
 
 parse_and_eval :: Parser SExpr -> String -> Either ParseError Int
