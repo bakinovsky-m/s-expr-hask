@@ -1,36 +1,65 @@
+{-# Language NamedFieldPuns #-}
 module Lib where
 
 import Text.ParserCombinators.Parsec
-    ( parse, digit, many1, between, char, ParseError, Parser, spaces, skipMany, skipMany1, sepBy )
-import Text.Parsec ( try, many, (<|>), option)
+  ( parse, digit, many1, between, char, ParseError, Parser, spaces, skipMany, skipMany1, sepBy, oneOf, string, anyChar, alphaNum )
+import Text.Parsec
+  ( try, many, (<|>), option)
+import Text.Read (readMaybe, readEither)
+import Control.Monad.Trans.State
+import Control.Monad.IO.Class
+import Data.Map as M (Map(..), insert, empty, toList)
+import System.IO
+import Control.Monad (forM,forM_)
 
--- + (123)
--- + (+ 1 2)
--- + (+ (1) (2))
--- + (+ (+ 1 2) 3)
--- + (+ 1 2 3)
-
-newtype Value = Value Int deriving (Show)
-data Op = Plus | Minus deriving (Show)
-data SExpr = SValue Value | SOp Op [SExpr] deriving (Show)
+data Value = ValueI Int
+           | ValueD Double
+    deriving (Show, Eq)
+data Op = Plus
+        | Minus
+        | Multiply
+    deriving (Show)
+data Def = DefVar String Value
+  deriving (Show)
+data SExpr = SValue Value
+           | SOp Op [SExpr]
+           | SDef Def
+    deriving (Show)
+newtype World = World {variables :: M.Map String Value}
+instance Show World where
+  show World {variables} = 
+    let
+    a = mconcat $ fmap (\(name, val) -> '\t':name ++ ": " ++ show val ++ "\n") (M.toList variables)
+    in
+      "World:\n" ++ a
+addToWorld :: World -> String -> Value -> World
+addToWorld World {variables} name value = World $ M.insert name value variables
 
 openBracket :: Parser Char
 openBracket = char '('
 closeBracket :: Parser Char
 closeBracket = char ')'
 
+digitOrDot :: Parser Char 
+digitOrDot = digit <|> char '.'
+
 value :: Parser Value
 value = do
-  n <- many1 digit
-  return (Value $ read n)
+  n <- many1 digitOrDot
+  case readMaybe n of
+    Just v -> pure $ ValueI v
+    Nothing -> case readEither n of
+      Left err -> error err
+      Right vv -> pure $ ValueD vv
 
 op :: Parser Op
 op =  do
-  a <- char '+' <|> char '-'
+  a <- oneOf ['+', '-', '*']
   case a of
-     '+' -> return Plus
-     '-' -> return Minus
-     _ -> return Minus
+     '+' -> pure Plus
+     '-' -> pure Minus
+     '*' -> pure Multiply
+     _ -> error "no such operator"
 
 svalue :: Parser SExpr
 svalue = SValue <$> (try (between openBracket closeBracket inner) <|> inner)
@@ -41,20 +70,43 @@ sop :: Parser SExpr
 sop = between openBracket closeBracket $ do
   o <- spaces *> op <* spaces
   es <- sepBy sexpr spaces
-  return $ SOp o es
+  pure $ SOp o es
+
+sdefvar :: Parser SExpr
+sdefvar = between openBracket closeBracket $ do
+  _ <- string "defvar" <* spaces
+  name <- do
+    firstSym <- anyChar
+    tailSyms <- many1 alphaNum
+    pure $ firstSym:tailSyms
+  val <- spaces *> value
+  pure $ SDef $ DefVar name val
 
 sexpr :: Parser SExpr
-sexpr = try svalue <|> sop
+sexpr = try svalue <|> try sop <|> sdefvar
 
-eval :: SExpr -> Int
-eval e = case e of
-  SValue (Value v) -> v
-  SOp op es -> case op of
-    Plus -> sum $ fmap eval es
-    Minus -> foldr (-) 0 $ fmap eval es
+evalWithState :: SExpr -> StateT World IO ()
+evalWithState sexpr = do
+  case sexpr of
+    SValue (ValueI v) -> liftIO $ print v
+    SValue (ValueD v) -> liftIO $ print v
+    SOp op sexpr -> undefined
+    SDef (DefVar name value) -> do
+      w <- get
+      let new_w = addToWorld w name value
+      liftIO $ print new_w
+      put new_w
+      pure ()
 
+parseAndEvalWithStateLoop :: World -> IO ()
+parseAndEvalWithStateLoop w = do
+  putStr ">> "
+  hFlush stdout
+  l <- getLine
+  new_w <- case parse sexpr "" l of
+        Left err -> error $ show err
+        Right v -> execStateT (evalWithState v) w
+  parseAndEvalWithStateLoop new_w
 
-parse_and_eval :: Parser SExpr -> String -> Either ParseError Int
-parse_and_eval p s = case parse p "" s of
-  Left err -> Left err
-  Right v -> Right $ eval v
+run :: IO ()
+run = parseAndEvalWithStateLoop (World M.empty)
